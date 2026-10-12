@@ -1,0 +1,38 @@
+import {chromium} from 'playwright'
+import assert from 'node:assert/strict'
+if(!process.env.POOL_TEST_SETUP_KEY)throw new Error('Use an isolated database and POOL_TEST_SETUP_KEY')
+const base=process.env.POOL_TEST_URL||'http://127.0.0.1:5190'
+const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE||'/home/ham/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome',headless:true})
+try{
+ const page=await browser.newPage({viewport:{width:1440,height:1100}}),errors=[]
+ page.on('pageerror',e=>errors.push(e.message))
+ await page.goto(base+'/login')
+ const status=await (await page.request.get(base+'/console/auth/status')).json()
+ if(!status.initialized)await page.getByLabel('初始化密钥').fill(process.env.POOL_TEST_SETUP_KEY)
+ await page.getByLabel('用户名',{exact:true}).fill('domain-test-admin')
+ await page.getByLabel('密码',{exact:true}).fill('domain-fixture-password')
+ await page.getByRole('button',{name:status.initialized?'登录':'创建管理员',exact:true}).click()
+ await page.waitForURL('**/admin')
+ await page.getByRole('button',{name:'配置中心',exact:true}).click()
+ await page.getByLabel('邮箱服务地址',{exact:true}).fill('https://mail.example.test')
+ await page.getByRole('button',{name:'添加域名',exact:true}).click()
+ await page.getByLabel('收件域名 1',{exact:true}).fill('example.test')
+ await page.getByRole('button',{name:'添加域名',exact:true}).click()
+ await page.getByLabel('收件域名 2',{exact:true}).fill('second.test')
+ await page.getByRole('combobox',{name:'自动注册域名',exact:true}).click()
+ await page.getByRole('option',{name:'second.test',exact:true}).click()
+ await page.getByLabel('邮箱管理员密码',{exact:true}).fill('mail-fixture-secret')
+ await page.getByRole('button',{name:'保存配置',exact:true}).click()
+ await page.getByText('配置已保存，下次维护循环使用新配置',{exact:true}).waitFor()
+ let response=await page.request.get(base+'/console/settings/supply'),raw=await response.text(),settings=JSON.parse(raw)
+ assert.deepEqual(settings.domains,['example.test','second.test']);assert.equal(settings.registrationDomain,'second.test')
+ assert.equal(settings.mailPasswordConfigured,true);assert.ok(!raw.includes('mail-fixture-secret'));assert.ok(!Object.hasOwn(settings,'domain'))
+ assert.equal(await page.getByLabel('邮箱管理员密码',{exact:true}).inputValue(),'')
+ await page.reload();await page.getByRole('button',{name:'配置中心',exact:true}).click()
+ await page.getByLabel('收件域名 2',{exact:true}).waitFor()
+ assert.equal(await page.getByLabel('收件域名 2',{exact:true}).inputValue(),'second.test')
+ await page.getByRole('button',{name:'切换深色模式',exact:true}).click()
+ await page.screenshot({path:'/home/ham/accountpool-mail-domains/mail-domains.png',animations:'disabled',fullPage:true})
+ assert.deepEqual(errors,[])
+ console.log('PASS: real API login, multi-domain save/reload, registration selection, secret redaction, direct mailbox configuration')
+}finally{await browser.close()}
